@@ -1,0 +1,337 @@
+{
+  "name": "Agent 1: Course Ingestion Pipeline",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "ingest-course",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "sticky-note-1",
+      "name": "Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [0, 0],
+      "parameters": {
+        "color": 6,
+        "width": 400,
+        "height": 400,
+        "content": "## Agent 1: Course Ingestion Pipeline\n\n### How to Use:\n1. Send POST request to `/webhook/ingest-course`\n2. Body: `{\"url\": \"COURSE_URL\", \"provider\": \"PROVIDER\"}`\n3. Agent downloads videos and transcribes\n4. Transcripts stored in PostgreSQL\n\n### Supported Platforms:\n- YouTube (playlists/videos)\n- LinkedIn Learning\n- Coursera\n- Any yt-dlp supported URL\n\n### Example Request:\n```json\n{\n  \"url\": \"https://youtube.com/playlist?list=...\",\n  \"provider\": \"YouTube\"\n}\n```"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst url = body.url;\nconst provider = body.provider || 'Unknown';\n\nif (!url) {\n  throw new Error('URL is required');\n}\n\n// Validate URL format\nconst validDomains = ['youtube.com', 'youtu.be', 'linkedin.com', 'coursera.org', 'udemy.com'];\nconst isValid = validDomains.some(domain => url.includes(domain));\n\nif (!isValid) {\n  console.log('Warning: URL may not be from a supported platform');\n}\n\nreturn [{\n  json: {\n    url: url,\n    provider: provider,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "fetch-metadata",
+      "name": "Fetch Course Metadata",
+      "type": "n8n-nodes-base.executeCommand",
+      "position": [680, 300],
+      "parameters": {
+        "command": "yt-dlp --dump-json --flat-playlist \"{{ $json.url }}\""
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "parse-metadata",
+      "name": "Parse Metadata",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "const output = $input.first().json.stdout;\nconst lines = output.trim().split('\\n').filter(line => line);\n\nlet courseInfo = {\n  title: 'Unknown Course',\n  videos: []\n};\n\nfor (const line of lines) {\n  try {\n    const video = JSON.parse(line);\n    courseInfo.videos.push({\n      id: video.id,\n      title: video.title,\n      url: video.url || `https://www.youtube.com/watch?v=${video.id}`,\n      duration: video.duration || 0\n    });\n    if (video.playlist_title) {\n      courseInfo.title = video.playlist_title;\n    }\n  } catch (e) {\n    console.log('Error parsing line:', e.message);\n  }\n}\n\ncourseInfo.totalVideos = courseInfo.videos.length;\ncourseInfo.totalDuration = courseInfo.videos.reduce((sum, v) => sum + (v.duration || 0), 0);\n\nreturn [{ json: courseInfo }];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "update-progress",
+      "name": "Update Progress",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1120, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO course_progress (course_name, provider, status, videos_total, hours_total) VALUES ('{{ $json.title }}', '{{ $('Validate Input').first().json.provider }}', 'transcribing', {{ $json.totalVideos }}, {{ $json.totalDuration / 3600 }}) ON CONFLICT (course_name) DO UPDATE SET status = 'transcribing', videos_total = {{ $json.totalVideos }}",
+        "options": {}
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "process-videos",
+      "name": "Process Each Video",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [1340, 300],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "download-audio",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.executeCommand",
+      "position": [1560, 300],
+      "parameters": {
+        "command": "yt-dlp -x --audio-format mp3 -o \"/tmp/audio/{{ $json.id }}.%(ext)s\" \"{{ $json.url }}\""
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "transcribe-audio",
+      "name": "Transcribe with Groq",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1780, 300],
+      "parameters": {
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "whisper-large-v3"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.GROQ_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "store-transcript",
+      "name": "Store Transcript",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2000, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workshop_transcripts (course_name, chapter_title, chapter_number, transcript, duration_minutes, video_url, word_count) VALUES ('{{ $('Parse Metadata').first().json.title }}', '{{ $json.title }}', {{ $json.chapterNumber }}, '{{ $json.transcript }}', {{ $json.duration / 60 }}, '{{ $json.url }}', {{ $json.transcript.split(' ').length }})",
+        "options": {}
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "send-notification",
+      "name": "Send Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "position": [2220, 300],
+      "parameters": {
+        "chatId": "{{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "✅ Transcribed: {{ $json.title }}\n📊 Words: {{ $json.transcript.split(' ').length }}\n⏱️ Duration: {{ Math.round($json.duration / 60) }} min",
+        "additionalFields": {}
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "loop-back",
+      "name": "Next Video",
+      "type": "n8n-nodes-base.noOp",
+      "position": [2440, 300],
+      "parameters": {},
+      "typeVersion": 1
+    },
+    {
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1120, 520],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'processing', message: 'Course ingestion started' }) }}"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "course-complete",
+      "name": "Course Complete",
+      "type": "n8n-nodes-base.code",
+      "position": [2660, 300],
+      "parameters": {
+        "jsCode": "// Update course status to transcribed\nconst courseTitle = $('Parse Metadata').first().json.title;\n\nreturn [{\n  json: {\n    courseName: courseTitle,\n    status: 'transcribed',\n    message: 'All videos transcribed successfully'\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "update-final-status",
+      "name": "Update Final Status",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2880, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE course_progress SET status = 'transcribed', updated_at = CURRENT_TIMESTAMP WHERE course_name = '{{ $json.courseName }}'",
+        "options": {}
+      },
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Course Metadata",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Course Metadata": {
+      "main": [
+        [
+          {
+            "node": "Parse Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Metadata": {
+      "main": [
+        [
+          {
+            "node": "Update Progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Progress": {
+      "main": [
+        [
+          {
+            "node": "Process Each Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Each Video": {
+      "main": [
+        [
+          {
+            "node": "Download Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Audio": {
+      "main": [
+        [
+          {
+            "node": "Transcribe with Groq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe with Groq": {
+      "main": [
+        [
+          {
+            "node": "Store Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Transcript": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Notification": {
+      "main": [
+        [
+          {
+            "node": "Next Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next Video": {
+      "main": [
+        [
+          {
+            "node": "Process Each Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "certificate-tracker"
+    },
+    {
+      "name": "agent1"
+    }
+  ]
+}
