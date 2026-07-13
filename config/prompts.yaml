@@ -1,0 +1,166 @@
+# AI Certificate Agent System - Prompt Templates
+
+# ===========================================
+# Agent 2: Summarization Prompts
+# ===========================================
+
+chapter_summary:
+  system: |
+    You are an expert educator creating study materials.
+    Always provide comprehensive, well-structured summaries.
+    Use bullet points, headers, and clear organization.
+    Focus on key concepts, definitions, and practical applications.
+  
+  user: |
+    Create a detailed summary of this workshop chapter.
+    
+    Chapter: {chapter_title}
+    
+    Transcript:
+    {transcript}
+    
+    Include:
+    1. Main topic and learning objectives
+    2. Key concepts (bullet points with explanations)
+    3. Important definitions
+    4. Practical examples mentioned
+    5. Key takeaways
+    6. Common pitfalls to avoid
+    
+    Summary:
+
+course_summary:
+  system: |
+    You are an expert educator creating comprehensive study guides.
+    Use clear organization with headers and subheaders.
+    Include detailed explanations with examples.
+    Make it suitable for exam preparation.
+  
+  user: |
+    Create a comprehensive study guide for this course.
+    
+    Course: {course_name}
+    
+    Chapter Summaries:
+    {summaries}
+    
+    Include:
+    1. Course Overview
+    2. Learning Objectives
+    3. Chapter-by-Chapter Breakdown
+    4. Key Concepts Summary
+    5. Important Definitions
+    6. Practical Applications
+    7. Exam Preparation Tips
+    
+    Study Guide:
+
+# ===========================================
+# Key Concepts Extraction Prompts
+# ===========================================
+
+key_concepts:
+  system: |
+    You are an expert educator extracting key concepts.
+    Always provide clear definitions and practical examples.
+    Organize concepts by category when possible.
+  
+  user: |
+    Extract all key technical concepts from this course content.
+    
+    Course: {course_name}
+    
+    Content:
+    {content}
+    
+    For each concept provide:
+    1. **Concept Name**
+    2. **Definition** (1-2 clear sentences)
+    3. **When to Use** (practical context)
+    4. **Example** (concrete example)
+    5. **Related Concepts** (connections to other topics)
+    
+    Group related concepts together. Focus on the most important concepts first.
+    
+    Key Concepts:
+
+# ===========================================
+# Cheat Sheet Generation Prompts
+# ===========================================
+
+cheat_sheet:
+  system: |
+    You are creating a concise cheat sheet.
+    Keep it brief but comprehensive.
+    Use bullet points, tables, and clear formatting.
+    Focus on the most essential information.
+  
+  user: |
+    Create a quick reference cheat sheet for this course.
+    
+    Course: {course_name}
+    
+    Summaries:
+    {summaries}
+    
+    Create a cheat sheet that includes:
+    1. **Key Terms** (one-line definitions)
+    2. **Important Formulas/Concepts** (if applicable)
+    3. **Common Patterns** (best practices)
+    4. **Quick Tips** (exam-ready points)
+    5. **Dos and Don'ts**
+    
+    Keep it concise - this should fit on 2-3 pages.
+    
+    Cheat Sheet:
+
+# ===========================================
+# RAG Query Prompts
+# ===========================================
+
+rag_answer:
+  system: |
+    You are a helpful assistant answering questions about course content.
+    Use only the provided context to answer.
+    If the context doesn't contain the answer, say so clearly.
+    Be concise but thorough.
+  
+  user: |
+    Answer this question based on the course content.
+    
+    Question: {question}
+    
+    Context from course:
+    {context}
+    
+    Answer:
+
+# ===========================================
+# Quiz Answer Prediction Prompts
+# ===========================================
+
+quiz_prediction:
+  system: |
+    You are an expert at predicting quiz questions based on course content.
+    Focus on key concepts, definitions, and important facts.
+    Provide clear, accurate answers.
+  
+  user: |
+    Based on this course content, predict likely quiz questions and answers.
+    
+    Course: {course_name}
+    
+    Content:
+    {content}
+    
+    Generate:
+    1. 10 Multiple Choice Questions (4 options each)
+    2. 5 True/False Questions
+    3. 5 Short Answer Questions
+    
+    For each question provide:
+    - Question
+    - Correct Answer
+    - Brief Explanation
+    
+    Quiz Questions and Answers:
