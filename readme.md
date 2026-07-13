@@ -6,26 +6,26 @@ An automated system that watches workshop videos, transcribes them, and generate
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    TWO-AGENT SYSTEM                              │
+│                    TWO-AGENT SYSTEM                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  AGENT 1: CONTENT WATCHER                                       │
-│  ├── Downloads workshop videos (yt-dlp)                        │
-│  ├── Extracts audio and transcribes (Groq Whisper)            │
-│  └── Stores raw transcripts in PostgreSQL                      │
+│  ├── Downloads workshop videos (yt-dlp)                         │
+│  ├── Extracts audio and transcribes (Groq Whisper)              │
+│  └── Stores raw transcripts in PostgreSQL                       │
 │                            │                                    │
 │                            ▼                                    │
-│  AGENT 2: CONTENT SUMMARIZER (RAG)                             │
-│  ├── Reads transcripts from PostgreSQL                         │
-│  ├── Generates embeddings for RAG search                      │
-│  ├── Creates summaries using Ollama                            │
-│  └── Builds study guides, cheat sheets, key concepts          │
+│  AGENT 2: CONTENT SUMMARIZER (RAG)                              │
+│  ├── Reads transcripts from PostgreSQL                          │
+│  ├── Generates embeddings for RAG search                        │
+│  ├── Creates summaries using Ollama                             │
+│  └── Builds study guides, cheat sheets, key concepts            │
 │                            │                                    │
 │                            ▼                                    │
 │  OUTPUT: Study Materials Ready for You                          │
-│  ├── study-guide.md (comprehensive notes)                     │
-│  ├── cheat-sheet.md (quick reference)                         │
-│  └── key-concepts.md (technical terms)                        │
+│  ├── study-guide.md (comprehensive notes)                       │
+│  ├── cheat-sheet.md (quick reference)                           │
+│  └── key-concepts.md (technical terms)                          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
