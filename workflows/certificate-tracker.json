@@ -1,0 +1,251 @@
+{
+  "name": "Certificate Tracker - Free Certs Automation",
+  "nodes": [
+    {
+      "id": "schedule-daily",
+      "name": "Daily Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "sticky-note-1",
+      "name": "Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [0, 0],
+      "parameters": {
+        "color": 6,
+        "width": 460,
+        "height": 500,
+        "content": "## 🎓 Certificate Tracker Setup\n\n### Free Certificates to Track:\n\n**Tier 1 - High Value (Proctored)**\n- Oracle OCI Foundations (FREE exam)\n- Google Professional ML Engineer ($200)\n- Microsoft AZ-900 (free vouchers available)\n- Anthropic CCA-F ($99)\n- NVIDIA GenAI Associate ($125-400)\n\n**Tier 2 - Free Completion Badges**\n- LinkedIn Learning (470+ free courses)\n- Google Skills Boost\n- Cisco Networking Academy\n- IBM SkillsBuild\n- Anthropic Academy (13 free courses)\n- OpenAI Academy\n\n### Setup:\n1. Create a Notion database with columns:\n   - Certificate Name\n   - Provider\n   - Status (Not Started/In Progress/Completed)\n   - Deadline\n   - URL\n   - Notes\n2. Add Notion API credentials\n3. Add Telegram credentials for notifications\n4. Activate workflow!"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "get-courses",
+      "name": "Get Certificate List",
+      "type": "n8n-nodes-base.notion",
+      "position": [480, 300],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "YOUR_NOTION_DATABASE_ID",
+          "cachedResultName": "Certificates"
+        },
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Status",
+              "condition": "not equals",
+              "value": "Completed"
+            }
+          ]
+        },
+        "options": {
+          "sort": {
+            "sortValues": [
+              {
+                "key": "Deadline",
+                "direction": "asc"
+              }
+            ]
+          }
+        }
+      },
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "check-deadlines",
+      "name": "Check Deadlines",
+      "type": "n8n-nodes-base.code",
+      "position": [700, 300],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date();\nconst urgent = [];\nconst upcoming = [];\nconst all = [];\n\nfor (const item of items) {\n  const deadline = item.json.properties?.Deadline?.date?.start;\n  const name = item.json.properties?.['Certificate Name']?.title?.[0]?.plainText || 'Unknown';\n  const provider = item.json.properties?.Provider?.select?.name || 'Unknown';\n  const status = item.json.properties?.Status?.status?.name || 'Not Started';\n  const url = item.json.properties?.URL?.url || '';\n  \n  const entry = {\n    name,\n    provider,\n    status,\n    deadline: deadline || 'No deadline',\n    url,\n    daysLeft: deadline ? Math.ceil((new Date(deadline) - today) / (1000 * 60 * 60 * 24)) : null\n  };\n  \n  all.push(entry);\n  \n  if (entry.daysLeft !== null && entry.daysLeft <= 7 && entry.daysLeft >= 0) {\n    urgent.push(entry);\n  } else if (entry.daysLeft !== null && entry.daysLeft <= 30 && entry.daysLeft > 7) {\n    upcoming.push(entry);\n  }\n}\n\nreturn [{\n  json: {\n    total: all.length,\n    urgent,\n    upcoming,\n    all\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "format-message",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "position": [920, 300],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nlet message = '🎓 **Certificate Tracker Daily Report**\\n\\n';\n\nif (data.urgent.length > 0) {\n  message += '🚨 **URGENT (Due in 7 days):**\\n';\n  for (const cert of data.urgent) {\n    message += `• ${cert.name} (${cert.provider}) - ${cert.daysLeft} days left\\n`;\n  }\n  message += '\\n';\n}\n\nif (data.upcoming.length > 0) {\n  message += '📅 **Upcoming (30 days):**\\n';\n  for (const cert of data.upcoming) {\n    message += `• ${cert.name} (${cert.provider}) - ${cert.daysLeft} days left\\n`;\n  }\n  message += '\\n';\n}\n\nmessage += `📊 **Total Active:** ${data.total} certificates\\n\\n`;\n\nmessage += '**🏆 Recommended Free Certifications:**\\n';\nmessage += '1. Oracle OCI Foundations (FREE exam)\\n';\nmessage += '2. LinkedIn Learning (470+ free courses)\\n';\nmessage += '3. Google Skills Boost\\n';\nmessage += '4. Cisco Networking Academy\\n';\nmessage += '5. IBM SkillsBuild\\n';\nmessage += '6. Anthropic Academy (13 free courses)\\n';\nmessage += '7. Microsoft Learn Challenges\\n';\n\nreturn [{ json: { message } }];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "send-telegram",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "position": [1140, 300],
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "webhook-callback",
+      "name": "Update Progress",
+      "type": "n8n-nodes-base.webhook",
+      "position": [480, 520],
+      "parameters": {
+        "path": "certificate-update",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "update-notion",
+      "name": "Update Notion",
+      "type": "n8n-nodes-base.notion",
+      "position": [700, 520],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.body.pageId }}"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Status",
+              "statusValue": "={{ $json.body.status }}"
+            },
+            {
+              "key": "Notes",
+              "text": "={{ $json.body.notes }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "respond-webhook",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [920, 520],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true }) }}"
+      },
+      "typeVersion": 1.1
+    }
+  ],
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "UTC"
+  },
+  "connections": {
+    "Daily Check": {
+      "main": [
+        [
+          {
+            "node": "Get Certificate List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Certificate List": {
+      "main": [
+        [
+          {
+            "node": "Check Deadlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Deadlines": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Progress": {
+      "main": [
+        [
+          {
+            "node": "Update Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Notion": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "description": "Track free certifications from Google, Microsoft, Cisco, Oracle, LinkedIn, NVIDIA, Anthropic. Sends daily Telegram alerts for deadlines and progress."
+}
