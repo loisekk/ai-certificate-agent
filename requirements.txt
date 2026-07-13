@@ -1,0 +1,27 @@
+# AI Certificate Agent System - Python Dependencies
+
+# Database
+psycopg2-binary>=2.9.9
+
+# HTTP requests
+requests>=2.31.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Data processing
+numpy>=1.24.0
+
+# CLI arguments
+argparse>=1.4.0
+
+# Logging (built-in, but just in case)
+loguru>=0.7.0
+
+# Optional: For advanced text processing
+# nltk>=3.8.0
+# spacy>=3.6.0
+
+# Optional: For PDF export
+# reportlab>=4.0.0
+# weasyprint>=60.0
