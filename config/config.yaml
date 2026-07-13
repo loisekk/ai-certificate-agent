@@ -1,0 +1,118 @@
+# AI Certificate Agent System - Configuration
+
+# ===========================================
+# Database Configuration
+# ===========================================
+database:
+  host: localhost
+  port: 5432
+  name: certificate_tracker
+  user: postgres
+  password: postgres
+
+# ===========================================
+# Agent 1: Content Watcher Configuration
+# ===========================================
+agent1_watcher:
+  # Groq API for transcription
+  groq_api_key: ${GROQ_API_KEY}
+  groq_model: whisper-large-v3
+  
+  # Audio settings
+  audio_dir: /tmp/audio
+  audio_format: mp3
+  audio_quality: 0  # Best quality
+  
+  # Subtitle settings
+  prefer_subtitles: true
+  subtitle_language: en
+
+# ===========================================
+# Agent 2: Content Summarizer Configuration
+# ===========================================
+agent2_summarizer:
+  # Ollama settings
+  ollama_url: http://localhost:11434
+  ollama_model: llama3
+  embedding_model: nomic-embed-text
+  
+  # Text chunking
+  chunk_size: 2000
+  chunk_overlap: 200
+  
+  # Output settings
+  output_dir: ./output
+
+# ===========================================
+# Course Settings
+# ===========================================
+courses:
+  # Default provider (can be overridden per course)
+  default_provider: Unknown
+  
+  # Supported providers
+  supported_providers:
+    - YouTube
+    - LinkedIn Learning
+    - Coursera
+    - Udemy
+    - Anthropic Academy
+    - Google
+    - Microsoft
+
+# ===========================================
+# Notification Settings
+# ===========================================
+notifications:
+  telegram:
+    enabled: false
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+  
+  email:
+    enabled: false
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    sender_email: ${EMAIL_SENDER}
+    sender_password: ${EMAIL_PASSWORD}
+
+# ===========================================
+# Processing Settings
+# ===========================================
+processing:
+  # Maximum concurrent downloads
+  max_concurrent_downloads: 3
+  
+  # Retry settings
+  max_retries: 3
+  retry_delay: 5  # seconds
+  
+  # Timeout settings
+  transcription_timeout: 300  # 5 minutes
+  summarization_timeout: 600  # 10 minutes
+
+# ===========================================
+# Output Settings
+# ===========================================
+output:
+  # Generate these materials
+  generate_study_guide: true
+  generate_cheat_sheet: true
+  generate_key_concepts: true
+  generate_quiz_answers: true
+  
+  # Output formats
+  formats:
+    - markdown
+    # - pdf  # Optional: requires weasyprint
+
+# ===========================================
+# RAG Settings
+# ===========================================
+rag:
+  # Similarity search
+  similarity_threshold: 0.7
+  max_results: 5
+  
+  # Context window
+  max_context_tokens: 8000
