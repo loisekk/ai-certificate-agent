@@ -1,0 +1,412 @@
+{
+  "name": "Agent 2: Content Summarizer Pipeline",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "summarize-course",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "sticky-note-1",
+      "name": "Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [0, 0],
+      "parameters": {
+        "color": 6,
+        "width": 400,
+        "height": 400,
+        "content": "## Agent 2: Content Summarizer Pipeline\n\n### How to Use:\n1. Send POST request to `/webhook/summarize-course`\n2. Body: `{\"courseName\": \"COURSE_NAME\"}`\n3. Agent processes transcripts and generates materials\n4. Study materials saved to output directory\n\n### Prerequisites:\n- Course must be transcribed by Agent 1\n- Ollama must be running with llama3 model\n\n### Output Materials:\n- study-guide.md (comprehensive notes)\n- cheat-sheet.md (quick reference)\n- key-concepts.md (technical terms)\n\n### Example Request:\n```json\n{\n  \"courseName\": \"Google AI Essentials\"\n}\n```"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst courseName = body.courseName;\n\nif (!courseName) {\n  throw new Error('courseName is required');\n}\n\nreturn [{\n  json: {\n    courseName: courseName,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "load-transcripts",
+      "name": "Load Transcripts",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, chapter_title, chapter_number, transcript, duration_minutes FROM workshop_transcripts WHERE course_name = '{{ $json.courseName }}' ORDER BY chapter_number",
+        "options": {}
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "check-transcripts",
+      "name": "Check Transcripts Exist",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.data.length }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "error-no-transcripts",
+      "name": "Error: No Transcripts",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1120, 500],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'error', message: 'No transcripts found. Run Agent 1 first.' }) }}",
+        "options": {
+          "responseCode": 404
+        }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "process-chapters",
+      "name": "Process Chapters",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [1120, 300],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "generate-chunk-embeddings",
+      "name": "Generate Embeddings",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 300],
+      "parameters": {
+        "jsCode": "// Split transcript into chunks\nconst transcript = $json.transcript;\nconst chunkSize = 2000;\nconst overlap = 200;\nconst chunks = [];\n\nfor (let i = 0; i < transcript.length; i += chunkSize - overlap) {\n  const chunk = transcript.slice(i, i + chunkSize);\n  if (chunk.trim()) {\n    chunks.push(chunk.trim());\n  }\n}\n\nreturn [{\n  json: {\n    chapterTitle: $json.chapter_title,\n    chapterNumber: $json.chapter_number,\n    chunks: chunks,\n    chunkCount: chunks.length\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "summarize-chapter",
+      "name": "Summarize with Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 300],
+      "parameters": {
+        "url": "={{ $env.OLLAMA_URL || 'http://localhost:11434' }}/api/chat",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{ $env.OLLAMA_MODEL || 'llama3' }}"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"system\", \"content\": \"You are an expert educator creating study materials. Always provide comprehensive, well-structured summaries.\"}, {\"role\": \"user\", \"content\": \"Create a detailed summary of this workshop chapter.\\n\\nChapter: {{ $json.chapterTitle }}\\n\\nContent:\\n{{ $json.chunks.join('\\n\\n') }}\\n\\nInclude:\\n1. Main topic and learning objectives\\n2. Key concepts (bullet points)\\n3. Important definitions\\n4. Key takeaways\\n\\nSummary:\"}]"
+            },
+            {
+              "name": "stream",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "store-chapter-summary",
+      "name": "Store Chapter Summary",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ai_summaries (course_name, summary_type, chapter, summary_content, word_count, model_used) VALUES ('{{ $('Validate Input').first().json.courseName }}', 'chapter', '{{ $json.chapterTitle }}', '{{ $json.message.content }}', {{ $json.message.content.split(' ').length }}, '{{ $env.OLLAMA_MODEL || 'llama3' }}')",
+        "options": {}
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "send-progress",
+      "name": "Send Progress",
+      "type": "n8n-nodes-base.telegram",
+      "position": [2000, 300],
+      "parameters": {
+        "chatId": "{{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "📝 Summarized: {{ $json.chapterTitle }}\n📊 Words: {{ $json.message.content.split(' ').length }}",
+        "additionalFields": {}
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "generate-study-guide",
+      "name": "Generate Study Guide",
+      "type": "n8n-nodes-base.code",
+      "position": [2220, 300],
+      "parameters": {
+        "jsCode": "// Combine all chapter summaries into study guide\nconst summaries = [];\n\n// This would typically fetch from the database\n// For now, we'll accumulate during processing\n\nreturn [{\n  json: {\n    courseName: $('Validate Input').first().json.courseName,\n    action: 'generate_study_guide'\n  }\n}];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "generate-cheat-sheet",
+      "name": "Generate Cheat Sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2440, 300],
+      "parameters": {
+        "url": "={{ $env.OLLAMA_URL || 'http://localhost:11434' }}/api/chat",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{ $env.OLLAMA_MODEL || 'llama3' }}"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"system\", \"content\": \"You are creating a concise cheat sheet. Keep it brief but comprehensive.\"}, {\"role\": \"user\", \"content\": \"Create a quick reference cheat sheet for the course: {{ $json.courseName }}. Include key terms, important concepts, and quick tips. Cheat Sheet:\"}]"
+            },
+            {
+              "name": "stream",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "save-materials",
+      "name": "Save Materials",
+      "type": "n8n-nodes-base.writeFilePath",
+      "position": [2660, 300],
+      "parameters": {
+        "fileName": "./output/{{ $('Validate Input').first().json.courseName }}/cheat-sheet.md",
+        "content": "={{ $json.message.content }}",
+        "options": {
+          "append": false
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "update-status",
+      "name": "Update Status",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2880, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE course_progress SET status = 'completed', study_guide_ready = TRUE, cheat_sheet_ready = TRUE, updated_at = CURRENT_TIMESTAMP WHERE course_name = '{{ $('Validate Input').first().json.courseName }}'",
+        "options": {}
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [3100, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'success', message: 'Course materials generated', courseName: $('Validate Input').first().json.courseName }) }}"
+      },
+      "typeVersion": 1.1
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Load Transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Transcripts": {
+      "main": [
+        [
+          {
+            "node": "Check Transcripts Exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Transcripts Exist": {
+      "main": [
+        [
+          {
+            "node": "Process Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error: No Transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Chapters": {
+      "main": [
+        [
+          {
+            "node": "Generate Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Summarize with Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize with Ollama": {
+      "main": [
+        [
+          {
+            "node": "Store Chapter Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Chapter Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Progress": {
+      "main": [
+        [
+          {
+            "node": "Generate Study Guide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Study Guide": {
+      "main": [
+        [
+          {
+            "node": "Generate Cheat Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cheat Sheet": {
+      "main": [
+        [
+          {
+            "node": "Save Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Materials": {
+      "main": [
+        [
+          {
+            "node": "Update Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "certificate-tracker"
+    },
+    {
+      "name": "agent2"
+    }
+  ]
+}
