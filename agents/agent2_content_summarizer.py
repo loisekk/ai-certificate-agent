@@ -193,7 +193,8 @@ class ContentSummarizer:
     def store_embeddings(self, course_name: str, chapter: str, 
                         chapter_number: int, chunks: List[str], 
                         embeddings: List[List[float]]) -> None:
-        """Store embeddings in PostgreSQL."""
+        """Store embeddings in PostgreSQL as JSONB."""
+        import json
         conn = self.get_db_connection()
         cur = conn.cursor()
         
@@ -203,9 +204,9 @@ class ContentSummarizer:
                     INSERT INTO chunk_embeddings 
                     (course_name, chapter, chapter_number, chunk_index, 
                      content, embedding, token_count)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
                 """, (course_name, chapter, chapter_number, i,
-                      chunk, str(embedding), len(chunk.split())))
+                      chunk, json.dumps(embedding), len(chunk.split())))
             
             conn.commit()
             logger.info(f"Stored {len(chunks)} embeddings for: {chapter}")
@@ -609,22 +610,22 @@ Make it suitable for exam preparation."""
         Returns:
             Answer based on course content
         """
-        # Generate question embedding
-        q_embedding = self.generate_embeddings([question])[0]
-        
-        # Search similar chunks
+        # Search by keyword matching (simplified without pgvector)
         conn = self.get_db_connection()
         cur = conn.cursor()
         
         try:
+            # Use text search for simplicity
             cur.execute("""
-                SELECT content, chapter, 
-                       1 - (embedding <=> %s::vector) as similarity
+                SELECT content, chapter
                 FROM chunk_embeddings
                 WHERE course_name = %s
-                ORDER BY similarity DESC
+                AND (
+                    content ILIKE %s
+                    OR chapter ILIKE %s
+                )
                 LIMIT 5
-            """, (str(q_embedding), course_name))
+            """, (course_name, f'%{question}%', f'%{question}%'))
             
             results = cur.fetchall()
             
@@ -633,7 +634,7 @@ Make it suitable for exam preparation."""
             
             # Build context
             context = "\n\n---\n\n".join([
-                f"**{row[1]}** (similarity: {row[2]:.2f}):\n{row[0]}"
+                f"**{row[1]}**:\n{row[0]}"
                 for row in results
             ])
             

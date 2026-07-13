@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # PostgreSQL with pgvector for vector storage
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine
     container_name: cert-tracker-postgres
     restart: unless-stopped
     environment:
