@@ -157,38 +157,19 @@ class ContentSummarizer:
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Generate embeddings using Ollama.
+        Note: qwen2.5 doesn't have a dedicated embedding endpoint.
+        We'll return empty embeddings and rely on text search.
         
         Args:
             texts: List of texts to embed
             
         Returns:
-            List of embedding vectors
+            List of embedding vectors (empty for now)
         """
-        embeddings = []
-        
-        for text in texts:
-            try:
-                response = requests.post(
-                    f"{self.ollama_url}/api/embeddings",
-                    json={
-                        "model": self.embedding_model,
-                        "prompt": text
-                    },
-                    timeout=60
-                )
-                
-                if response.status_code == 200:
-                    embedding = response.json()['embedding']
-                    embeddings.append(embedding)
-                else:
-                    logger.error(f"Embedding failed: {response.status_code}")
-                    embeddings.append([0.0] * 768)  # Default dimension
-                    
-            except Exception as e:
-                logger.error(f"Embedding error: {e}")
-                embeddings.append([0.0] * 768)
-        
-        return embeddings
+        # qwen2.5:3b doesn't support /api/embeddings endpoint
+        # Return empty embeddings - we'll use text search instead
+        logger.warning("Embeddings not available with qwen2.5 - using text search")
+        return [[] for _ in texts]
     
     def store_embeddings(self, course_name: str, chapter: str, 
                         chapter_number: int, chunks: List[str], 
@@ -498,8 +479,9 @@ Make it suitable for exam preparation."""
             if not transcripts:
                 raise ValueError(f"No transcripts found for: {course_name}")
             
-            # Create output directory
-            course_dir = os.path.join(self.output_dir, course_name)
+            # Create output directory (sanitize name for Windows)
+            safe_name = course_name.replace(':', '').replace('|', '').replace('?', '').replace('*', '').replace('"', '').replace('<', '').replace('>', '')
+            course_dir = os.path.join(self.output_dir, safe_name)
             os.makedirs(course_dir, exist_ok=True)
             
             # Step 1: Generate embeddings for RAG
