@@ -68,11 +68,28 @@ class ContentWatcher:
         # Create audio directory
         os.makedirs(self.audio_dir, exist_ok=True)
         
+        # Cleanup any leftover audio files from previous runs
+        self.cleanup_old_audio()
+        
         logger.info("ContentWatcher initialized")
     
     def get_db_connection(self):
         """Get PostgreSQL connection."""
         return psycopg2.connect(**self.postgres_config)
+    
+    def cleanup_old_audio(self):
+        """Cleanup any leftover audio files from previous runs."""
+        import glob
+        audio_files = glob.glob(os.path.join(self.audio_dir, "*.mp3"))
+        audio_files += glob.glob(os.path.join(self.audio_dir, "*.webm"))
+        audio_files += glob.glob(os.path.join(self.audio_dir, "*.wav"))
+        
+        for f in audio_files:
+            try:
+                os.remove(f)
+                logger.info(f"Cleaned up old audio: {f}")
+            except Exception as e:
+                logger.warning(f"Could not remove {f}: {e}")
     
     def fetch_course_metadata(self, url: str) -> Dict:
         """
@@ -398,9 +415,10 @@ class ContentWatcher:
                         # Transcribe
                         transcript = self.transcribe_with_groq(audio_path)
                         
-                        # Cleanup audio file
+                        # ALWAYS cleanup audio file immediately after transcription
                         if os.path.exists(audio_path):
                             os.remove(audio_path)
+                            logger.info(f"Cleaned up audio: {audio_path}")
                     
                     # Store transcript
                     self.store_transcript(
