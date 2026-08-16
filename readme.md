@@ -142,7 +142,7 @@ output/
 
 ## 📚 Supported Platforms
 
-- YouTube (videos/playlists)
+- YouTube (videos/playlists/watch later's)
 - LinkedIn Learning
 - Coursera
 - Udemy
