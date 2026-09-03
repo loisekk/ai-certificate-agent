@@ -2,10 +2,14 @@
 """
 Agent 2: Content Summarizer (RAG Engine)
 Processes transcripts from PostgreSQL and generates study materials
-using Retrieval-Augmented Generation (RAG) with Ollama.
+using Retrieval-Augmented Generation with configurable LLM providers.
+
+Supports: Ollama, OpenAI, Anthropic, DeepSeek, Groq
+Falls back to text-only summarization if no provider is available.
 """
 
 import os
+import sys
 import json
 import psycopg2
 import requests
@@ -13,6 +17,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 import logging
+
+# Add parent directory to path for provider imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from providers import create_provider, list_providers, LLMProvider
 
 # Configure logging
 logging.basicConfig(
@@ -29,8 +37,8 @@ class ContentSummarizer:
     Pipeline:
     1. Load transcripts from PostgreSQL
     2. Chunk content for processing
-    3. Generate embeddings for RAG
-    4. Generate summaries using Ollama
+    3. Generate embeddings for RAG (if provider supports it)
+    4. Generate summaries using configured LLM provider
     5. Create study materials
     """
     
@@ -40,28 +48,25 @@ class ContentSummarizer:
         
         Args:
             config: Dictionary containing:
-                - ollama_url: Ollama API URL (default: http://localhost:11434)
-                - ollama_model: LLM model name (default: llama3)
-                - embedding_model: Embedding model (default: nomic-embed-text)
+                - provider: LLM provider name ('ollama', 'openai', 'anthropic', 'deepseek', 'groq')
                 - postgres_host: PostgreSQL host
                 - postgres_port: PostgreSQL port
                 - postgres_db: Database name
                 - postgres_user: Database user
                 - postgres_password: Database password
                 - output_dir: Output directory for materials
+                - chunk_size: Text chunk size (default: 2000)
+                - chunk_overlap: Chunk overlap (default: 200)
         """
-        self.ollama_url = config.get('ollama_url', 'http://localhost:11434')
-        self.ollama_model = config.get('ollama_model', 'llama3')
-        self.embedding_model = config.get('embedding_model', 'nomic-embed-text')
         self.output_dir = config.get('output_dir', './output')
         
         # PostgreSQL config
         self.postgres_config = {
-            'host': config['postgres_host'],
-            'port': config['postgres_port'],
-            'dbname': config['postgres_db'],
-            'user': config['postgres_user'],
-            'password': config['postgres_password']
+            'host': config.get('postgres_host', 'localhost'),
+            'port': config.get('postgres_port', '5432'),
+            'dbname': config.get('postgres_db', 'certificate_tracker'),
+            'user': config.get('postgres_user', 'postgres'),
+            'password': config.get('postgres_password', 'postgres')
         }
         
         # Text chunking settings
@@ -71,24 +76,49 @@ class ContentSummarizer:
         # Create output directory
         os.makedirs(self.output_dir, exist_ok=True)
         
-        logger.info("ContentSummarizer initialized")
-        logger.info(f"Ollama URL: {self.ollama_url}")
-        logger.info(f"Model: {self.ollama_model}")
+        # Initialize LLM provider
+        self.provider = None
+        provider_name = config.get('provider') or os.environ.get('LLM_PROVIDER', 'groq')
+        
+        try:
+            provider_config = {
+                'ollama_url': config.get('ollama_url', os.environ.get('OLLAMA_URL', 'http://localhost:11434')),
+                'ollama_model': config.get('ollama_model', os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')),
+                'openai_api_key': config.get('openai_api_key', os.environ.get('OPENAI_API_KEY', '')),
+                'openai_model': config.get('openai_model', os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')),
+                'openai_base_url': config.get('openai_base_url', os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')),
+                'anthropic_api_key': config.get('anthropic_api_key', os.environ.get('ANTHROPIC_API_KEY', '')),
+                'anthropic_model': config.get('anthropic_model', os.environ.get('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022')),
+                'deepseek_api_key': config.get('deepseek_api_key', os.environ.get('DEEPSEEK_API_KEY', '')),
+                'deepseek_model': config.get('deepseek_model', os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')),
+                'groq_api_key': config.get('groq_api_key', os.environ.get('GROQ_API_KEY', '')),
+                'groq_model': config.get('groq_model', os.environ.get('GROQ_MODEL', 'llama3-70b-8192')),
+            }
+            
+            self.provider = create_provider(provider_name, provider_config)
+            
+            if self.provider.is_available():
+                info = self.provider.get_model_info()
+                logger.info(f"✅ LLM Provider: {info['provider']} ({info['model']}) - {info['type']}")
+            else:
+                logger.warning(f"⚠️  Provider '{provider_name}' is configured but not available")
+                logger.warning("   Falling back to text-only summarization")
+                self.provider = None
+                
+        except Exception as e:
+            logger.warning(f"⚠️  Could not initialize LLM provider: {e}")
+            logger.warning("   Using text-only summarization mode")
+            self.provider = None
+        
+        if self.provider is None:
+            logger.info("📝 Running in TEXT-ONLY mode (no LLM - summaries will be raw transcripts)")
     
     def get_db_connection(self):
         """Get PostgreSQL connection."""
         return psycopg2.connect(**self.postgres_config)
     
     def load_transcripts(self, course_name: str) -> List[Dict]:
-        """
-        Load transcripts from PostgreSQL.
-        
-        Args:
-            course_name: Name of the course
-            
-        Returns:
-            List of transcript dictionaries
-        """
+        """Load transcripts from PostgreSQL."""
         conn = self.get_db_connection()
         cur = conn.cursor()
         
@@ -120,15 +150,7 @@ class ContentSummarizer:
             conn.close()
     
     def chunk_text(self, text: str) -> List[str]:
-        """
-        Split text into chunks with overlap.
-        
-        Args:
-            text: Text to chunk
-            
-        Returns:
-            List of text chunks
-        """
+        """Split text into chunks with overlap."""
         chunks = []
         start = 0
         text_length = len(text)
@@ -136,9 +158,7 @@ class ContentSummarizer:
         while start < text_length:
             end = start + self.chunk_size
             
-            # Try to break at sentence boundary
             if end < text_length:
-                # Look for sentence end
                 for separator in ['. ', '.\n', '! ', '? ', '\n\n']:
                     last_sep = text[start:end].rfind(separator)
                     if last_sep > self.chunk_size // 2:
@@ -149,105 +169,58 @@ class ContentSummarizer:
             if chunk:
                 chunks.append(chunk)
             
-            # Move start with overlap
             start = end - self.chunk_overlap
         
         return chunks
     
-    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def generate_with_llm(self, prompt: str, system_prompt: str = None) -> str:
         """
-        Generate embeddings using Ollama.
-        Note: qwen2.5 doesn't have a dedicated embedding endpoint.
-        We'll return empty embeddings and rely on text search.
-        
-        Args:
-            texts: List of texts to embed
-            
-        Returns:
-            List of embedding vectors (empty for now)
+        Generate text using configured LLM provider.
+        Falls back to text-only mode if no provider available.
         """
-        # qwen2.5:3b doesn't support /api/embeddings endpoint
-        # Return empty embeddings - we'll use text search instead
-        logger.warning("Embeddings not available with qwen2.5 - using text search")
-        return [[] for _ in texts]
-    
-    def store_embeddings(self, course_name: str, chapter: str, 
-                        chapter_number: int, chunks: List[str], 
-                        embeddings: List[List[float]]) -> None:
-        """Store embeddings in PostgreSQL as JSONB."""
-        import json
-        conn = self.get_db_connection()
-        cur = conn.cursor()
+        if self.provider is None:
+            # Text-only fallback: return the prompt content as-is (truncated summary)
+            return self._text_only_summary(prompt)
         
         try:
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                cur.execute("""
-                    INSERT INTO chunk_embeddings 
-                    (course_name, chapter, chapter_number, chunk_index, 
-                     content, embedding, token_count)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
-                """, (course_name, chapter, chapter_number, i,
-                      chunk, json.dumps(embedding), len(chunk.split())))
-            
-            conn.commit()
-            logger.info(f"Stored {len(chunks)} embeddings for: {chapter}")
-            
+            return self.provider.generate_with_retry(prompt, system_prompt)
         except Exception as e:
-            conn.rollback()
-            logger.error(f"Error storing embeddings: {e}")
-            raise
-        finally:
-            cur.close()
-            conn.close()
+            logger.error(f"LLM generation failed: {e}")
+            logger.info("Falling back to text-only summary")
+            return self._text_only_summary(prompt)
     
-    def generate_with_ollama(self, prompt: str, system_prompt: str = None) -> str:
+    def _text_only_summary(self, prompt: str) -> str:
         """
-        Generate text using Ollama.
-        
-        Args:
-            prompt: User prompt
-            system_prompt: Optional system prompt
-            
-        Returns:
-            Generated text
+        Text-only fallback when no LLM is available.
+        Extracts key sentences from the transcript.
         """
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        # Extract lines that look like key content
+        lines = prompt.split('\n')
+        key_lines = []
         
-        try:
-            response = requests.post(
-                f"{self.ollama_url}/api/chat",
-                json={
-                    "model": self.ollama_model,
-                    "messages": messages,
-                    "stream": False
-                },
-                timeout=300  # 5 minute timeout
-            )
-            
-            if response.status_code == 200:
-                return response.json()['message']['content']
-            else:
-                logger.error(f"Ollama error: {response.status_code}")
-                return ""
-                
-        except Exception as e:
-            logger.error(f"Ollama request failed: {e}")
-            return ""
+        for line in lines:
+            line = line.strip()
+            # Skip very short lines, timestamps, headers
+            if len(line) < 20:
+                continue
+            if '-->' in line or line.startswith('WEBVTT'):
+                continue
+            # Keep lines that seem like content
+            key_lines.append(line)
+        
+        if not key_lines:
+            return "No summary available (text-only mode)"
+        
+        # Take first ~500 words as summary
+        summary = ' '.join(key_lines)
+        words = summary.split()
+        if len(words) > 500:
+            summary = ' '.join(words[:500]) + '...'
+        
+        return summary
     
     def summarize_chapter(self, chapter_title: str, transcript: str) -> str:
-        """
-        Generate summary for a chapter.
-        
-        Args:
-            chapter_title: Chapter title
-            transcript: Chapter transcript
-            
-        Returns:
-            Chapter summary
-        """
+        """Generate summary for a chapter."""
         system_prompt = """You are an expert educator creating study materials.
 Always provide comprehensive, well-structured summaries.
 Use bullet points, headers, and clear organization.
@@ -270,23 +243,13 @@ Include:
 
 Summary:"""
         
-        return self.generate_with_ollama(prompt, system_prompt)
+        return self.generate_with_llm(prompt, system_prompt)
     
     def extract_key_concepts(self, course_name: str, transcripts: List[Dict]) -> str:
-        """
-        Extract key technical concepts from all transcripts.
-        
-        Args:
-            course_name: Course name
-            transcripts: List of transcripts
-            
-        Returns:
-            Key concepts document
-        """
-        # Combine all transcripts (limited to avoid context overflow)
+        """Extract key technical concepts from all transcripts."""
         all_text = "\n\n".join([
             f"## {t['chapter_title']}\n{t['transcript'][:3000]}" 
-            for t in transcripts[:10]  # Limit to first 10 chapters
+            for t in transcripts[:10]
         ])
         
         system_prompt = """You are an expert educator extracting key concepts.
@@ -311,20 +274,10 @@ Group related concepts together. Focus on the most important concepts first.
 
 Key Concepts:"""
         
-        return self.generate_with_ollama(prompt, system_prompt)
+        return self.generate_with_llm(prompt, system_prompt)
     
     def generate_cheat_sheet(self, course_name: str, summaries: List[str]) -> str:
-        """
-        Generate a quick reference cheat sheet.
-        
-        Args:
-            course_name: Course name
-            summaries: List of chapter summaries
-            
-        Returns:
-            Cheat sheet content
-        """
-        # Combine summaries
+        """Generate a quick reference cheat sheet."""
         combined = "\n\n".join([
             f"### Chapter {i+1}\n{summary[:2000]}" 
             for i, summary in enumerate(summaries[:10])
@@ -353,27 +306,19 @@ Keep it concise - this should fit on 2-3 pages.
 
 Cheat Sheet:"""
         
-        return self.generate_with_ollama(prompt, system_prompt)
+        return self.generate_with_llm(prompt, system_prompt)
     
     def generate_study_guide(self, course_name: str, transcripts: List[Dict]) -> str:
-        """
-        Generate comprehensive study guide.
-        
-        Args:
-            course_name: Course name
-            transcripts: List of transcripts
-            
-        Returns:
-            Study guide content
-        """
-        system_prompt = """You are an expert educator creating comprehensive study guides.
-Use clear organization with headers and subheaders.
-Include detailed explanations with examples.
-Make it suitable for exam preparation."""
-        
-        # Process each chapter
+        """Generate comprehensive study guide."""
         study_guide = f"# Study Guide: {course_name}\n\n"
         study_guide += f"*Generated on {datetime.now().strftime('%Y-%m-%d')}*\n\n"
+        
+        if self.provider:
+            info = self.provider.get_model_info()
+            study_guide += f"*Provider: {info['provider']} ({info['model']})*\n\n"
+        else:
+            study_guide += "*Mode: Text-only (no LLM provider)*\n\n"
+        
         study_guide += "---\n\n"
         
         for i, transcript in enumerate(transcripts, 1):
@@ -389,7 +334,6 @@ Make it suitable for exam preparation."""
             study_guide += summary + "\n\n"
             study_guide += "---\n\n"
         
-        # Add key concepts section
         key_concepts = self.extract_key_concepts(course_name, transcripts)
         study_guide += "## Key Concepts Summary\n\n"
         study_guide += key_concepts + "\n\n"
@@ -403,12 +347,13 @@ Make it suitable for exam preparation."""
         cur = conn.cursor()
         
         try:
+            model_used = self.provider.get_model_info()['model'] if self.provider else 'text-only'
             cur.execute("""
                 INSERT INTO ai_summaries 
                 (course_name, summary_type, chapter, summary_content, word_count, model_used)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (course_name, summary_type, chapter, content, 
-                  len(content.split()), self.ollama_model))
+                  len(content.split()), model_used))
             
             conn.commit()
         except Exception as e:
@@ -450,12 +395,6 @@ Make it suitable for exam preparation."""
     def process_course(self, course_name: str) -> Dict:
         """
         Main pipeline: Process an entire course.
-        
-        Args:
-            course_name: Name of the course
-            
-        Returns:
-            Processing results
         """
         start_time = datetime.now()
         
@@ -484,19 +423,26 @@ Make it suitable for exam preparation."""
             course_dir = os.path.join(self.output_dir, safe_name)
             os.makedirs(course_dir, exist_ok=True)
             
-            # Step 1: Generate embeddings for RAG
-            logger.info("Step 1: Generating embeddings...")
+            # Step 1: Store transcript chunks for RAG
+            logger.info("Step 1: Storing transcript chunks for RAG...")
             for transcript in transcripts:
                 chunks = self.chunk_text(transcript['transcript'])
                 if chunks:
-                    embeddings = self.generate_embeddings(chunks)
-                    self.store_embeddings(
-                        course_name,
-                        transcript['chapter_title'],
-                        transcript['chapter_number'],
-                        chunks,
-                        embeddings
-                    )
+                    conn = self.get_db_connection()
+                    cur = conn.cursor()
+                    for i, chunk in enumerate(chunks):
+                        cur.execute("""
+                            INSERT INTO chunk_embeddings 
+                            (course_name, chapter, chapter_number, chunk_index, 
+                             content, embedding, token_count)
+                            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                        """, (course_name, transcript['chapter_title'], 
+                              transcript['chapter_number'], i,
+                              chunk, json.dumps([]), len(chunk.split())))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    logger.info(f"  Stored {len(chunks)} chunks for: {transcript['chapter_title']}")
             
             # Step 2: Generate chapter summaries
             logger.info("Step 2: Generating chapter summaries...")
@@ -551,9 +497,13 @@ Make it suitable for exam preparation."""
             cur.close()
             conn.close()
             
+            provider_info = self.provider.get_model_info() if self.provider else {'provider': 'text-only', 'model': 'none'}
+            
             result = {
                 'course_name': course_name,
                 'chapters_processed': len(transcripts),
+                'provider': provider_info['provider'],
+                'model': provider_info['model'],
                 'materials_generated': [
                     'study-guide.md',
                     'cheat-sheet.md',
@@ -565,6 +515,7 @@ Make it suitable for exam preparation."""
             }
             
             logger.info(f"✅ Course completed: {course_name}")
+            logger.info(f"   Provider: {provider_info['provider']} ({provider_info['model']})")
             logger.info(f"   Chapters: {len(transcripts)}")
             logger.info(f"   Materials: {len(result['materials_generated'])}")
             logger.info(f"   Duration: {duration:.1f}s")
@@ -582,22 +533,11 @@ Make it suitable for exam preparation."""
             }
     
     def rag_query(self, question: str, course_name: str) -> str:
-        """
-        Answer a question using RAG.
-        
-        Args:
-            question: User question
-            course_name: Course to search in
-            
-        Returns:
-            Answer based on course content
-        """
-        # Search by keyword matching (simplified without pgvector)
+        """Answer a question using RAG."""
         conn = self.get_db_connection()
         cur = conn.cursor()
         
         try:
-            # Use text search for simplicity
             cur.execute("""
                 SELECT content, chapter
                 FROM chunk_embeddings
@@ -614,13 +554,11 @@ Make it suitable for exam preparation."""
             if not results:
                 return "No relevant content found for this question."
             
-            # Build context
             context = "\n\n---\n\n".join([
                 f"**{row[1]}**:\n{row[0]}"
                 for row in results
             ])
             
-            # Generate answer
             system_prompt = """You are a helpful assistant answering questions about course content.
 Use only the provided context to answer.
 If the context doesn't contain the answer, say so clearly.
@@ -635,7 +573,7 @@ Context from course:
 
 Answer:"""
             
-            return self.generate_with_ollama(prompt, system_prompt)
+            return self.generate_with_llm(prompt, system_prompt)
             
         finally:
             cur.close()
@@ -648,30 +586,40 @@ def main():
     
     parser = argparse.ArgumentParser(description='Agent 2: Content Summarizer')
     parser.add_argument('course_name', help='Course name to process')
-    parser.add_argument('--ollama-url', default='http://localhost:11434', 
-                       help='Ollama API URL')
-    parser.add_argument('--ollama-model', default='llama3', help='LLM model')
-    parser.add_argument('--embedding-model', default='nomic-embed-text',
-                       help='Embedding model')
+    parser.add_argument('--provider', choices=['ollama', 'openai', 'anthropic', 'deepseek', 'groq'],
+                       help='LLM provider (default: from env LLM_PROVIDER or groq)')
     parser.add_argument('--output-dir', default='./output', help='Output directory')
     parser.add_argument('--postgres-host', default='localhost', help='PostgreSQL host')
     parser.add_argument('--postgres-port', default='5432', help='PostgreSQL port')
     parser.add_argument('--postgres-db', default='certificate_tracker', help='Database name')
     parser.add_argument('--postgres-user', default='postgres', help='Database user')
     parser.add_argument('--postgres-password', default='postgres', help='Database password')
+    parser.add_argument('--list-providers', action='store_true', help='List available providers')
     
     args = parser.parse_args()
     
+    if args.list_providers:
+        print("\nAvailable LLM Providers:")
+        print("=" * 50)
+        providers = list_providers()
+        for name, info in providers.items():
+            status = "✅ Available" if info['available'] else "❌ Not available"
+            print(f"  {name:12} {status}")
+            if 'info' in info:
+                print(f"               Model: {info['info'].get('model', 'N/A')}")
+            if 'error' in info:
+                print(f"               Error: {info['error']}")
+        print()
+        return
+    
     config = {
-        'ollama_url': args.ollama_url,
-        'ollama_model': args.ollama_model,
-        'embedding_model': args.embedding_model,
+        'provider': args.provider,
         'output_dir': args.output_dir,
         'postgres_host': args.postgres_host,
         'postgres_port': args.postgres_port,
         'postgres_db': args.postgres_db,
         'postgres_user': args.postgres_user,
-        'postgres_password': args.postgres_password
+        'postgres_password': args.postgres_password,
     }
     
     summarizer = ContentSummarizer(config)
