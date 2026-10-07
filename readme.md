@@ -9,7 +9,7 @@ An automated system that watches workshop videos, transcribes them, and generate
 │                    TWO-AGENT SYSTEM                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  AGENT 1: CONTENT WATCHER                                          │
+│  AGENT 1: CONTENT WATCHER                                       │
 │  ├── Downloads workshop videos (yt-dlp)                         │
 │  ├── Extracts audio and transcribes (Groq Whisper)              │
 │  └── Stores raw transcripts in PostgreSQL                       │
